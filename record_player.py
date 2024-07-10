@@ -1,18 +1,24 @@
 import pyaudio
 import numpy as np
 from scipy import signal
+import time
+import logging
+
+# Set up logging
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 def list_audio_devices(pyaudio_instance: pyaudio.PyAudio) -> None:
     """Print all available audio devices."""
-    print("Available audio devices:")
+    logging.info("Listing available audio devices:")
     for device_index in range(pyaudio_instance.get_device_count()):
         device_info = pyaudio_instance.get_device_info_by_index(device_index)
-        print(f"Device {device_index}: {device_info['name']}")
-        print(f"  Max Input Channels: {device_info['maxInputChannels']}")
-        print(f"  Max Output Channels: {device_info['maxOutputChannels']}")
-        print(f"  Default Sample Rate: {device_info['defaultSampleRate']}")
-        print()
+        logging.info(f"Device {device_index}: {device_info['name']}")
+        logging.info(f"  Max Input Channels: {device_info['maxInputChannels']}")
+        logging.info(f"  Max Output Channels: {device_info['maxOutputChannels']}")
+        logging.info(f"  Default Sample Rate: {device_info['defaultSampleRate']}")
 
 
 def get_device_index(prompt: str) -> int:
@@ -42,94 +48,118 @@ def simple_stereo_enhance(
 
 
 def main() -> None:
-    # Initialize PyAudio
     pyaudio_instance = pyaudio.PyAudio()
+    input_stream = None
+    output_stream = None
 
-    # List available audio devices
-    list_audio_devices(pyaudio_instance)
-
-    # Get user input for device selection
-    input_device_index = get_device_index(
-        "Enter the index of the input device you want to use: "
-    )
-    output_device_index = get_device_index(
-        "Enter the index of the output device you want to use: "
-    )
-
-    # Get device info
-    input_device_info = pyaudio_instance.get_device_info_by_index(input_device_index)
-    output_device_info = pyaudio_instance.get_device_info_by_index(output_device_index)
-
-    # Audio parameters
-    audio_format = pyaudio.paFloat32
-    input_channels = min(2, input_device_info["maxInputChannels"])
-    sample_rate = int(input_device_info["defaultSampleRate"])
-    chunk_size = 1024
-    output_channels = 2
-
-    print(
-        f"Using {input_channels} input channel(s) and {output_channels} output channel(s)"
-    )
-
-    # Open input stream
-    input_stream = pyaudio_instance.open(
-        format=audio_format,
-        channels=input_channels,
-        rate=sample_rate,
-        input=True,
-        input_device_index=input_device_index,
-        frames_per_buffer=chunk_size,
-    )
-
-    # Open output stream
-    output_stream = pyaudio_instance.open(
-        format=audio_format,
-        channels=output_channels,
-        rate=sample_rate,
-        output=True,
-        output_device_index=output_device_index,
-        frames_per_buffer=chunk_size,
-    )
-
-    print("Recording and processing. Press Ctrl+C to stop.")
     try:
+        list_audio_devices(pyaudio_instance)
+
+        input_device_index = get_device_index(
+            "Enter the index of the input device you want to use: "
+        )
+        logging.info(f"Selected input device index: {input_device_index}")
+
+        input_device_info = pyaudio_instance.get_device_info_by_index(
+            input_device_index
+        )
+        logging.info(f"Input device info: {input_device_info}")
+
+        audio_format = pyaudio.paFloat32
+        input_channels = min(2, input_device_info["maxInputChannels"])
+        sample_rate = int(input_device_info["defaultSampleRate"])
+        chunk_size = 1024
+        output_channels = 2
+
+        logging.info(
+            f"Using {input_channels} input channel(s) and {output_channels} output channel(s)"
+        )
+        logging.info(f"Sample rate: {sample_rate}, Chunk size: {chunk_size}")
+
+        logging.info("Opening input stream...")
+        input_stream = pyaudio_instance.open(
+            format=audio_format,
+            channels=input_channels,
+            rate=sample_rate,
+            input=True,
+            input_device_index=input_device_index,
+            frames_per_buffer=chunk_size,
+        )
+        logging.info("Input stream opened successfully")
+
+        logging.info("Opening output stream...")
+        output_stream = pyaudio_instance.open(
+            format=audio_format,
+            channels=output_channels,
+            rate=sample_rate,
+            output=True,
+            frames_per_buffer=chunk_size,
+        )
+        logging.info("Output stream opened successfully")
+
+        logging.info("Starting audio processing loop")
         while True:
-            # Read input
-            input_data = np.frombuffer(input_stream.read(chunk_size), dtype=np.float32)
+            try:
+                input_data = np.frombuffer(
+                    input_stream.read(chunk_size, exception_on_overflow=False),
+                    dtype=np.float32,
+                )
 
-            # If input is mono, duplicate the channel for stereo processing
-            if input_channels == 1:
-                input_data = np.repeat(input_data, 2)
+                if input_channels == 1:
+                    input_data = np.repeat(input_data, 2)
 
-            # Split channels
-            left_channel = input_data[::2]
-            right_channel = input_data[1::2]
+                left_channel = input_data[::2]
+                right_channel = input_data[1::2]
 
-            # Apply simple stereo enhancement
-            enhanced_left, enhanced_right = simple_stereo_enhance(
-                left_channel, right_channel
-            )
+                enhanced_left, enhanced_right = simple_stereo_enhance(
+                    left_channel, right_channel
+                )
 
-            # Combine channels
-            enhanced_data = np.column_stack((enhanced_left, enhanced_right)).flatten()
+                enhanced_data = np.column_stack(
+                    (enhanced_left, enhanced_right)
+                ).flatten()
+                enhanced_data = np.clip(enhanced_data, -1, 1)
 
-            # Clip to prevent overflow
-            enhanced_data = np.clip(enhanced_data, -1, 1)
-
-            # Write to output stream
-            output_stream.write(enhanced_data.astype(np.float32).tobytes())
+                output_stream.write(enhanced_data.astype(np.float32).tobytes())
+            except IOError as e:
+                logging.error(f"IOError occurred: {e}")
+                if e.errno == -9981:  # Input overflow
+                    logging.warning("Input overflow detected. Continuing...")
+                    continue
+                else:
+                    raise
 
     except KeyboardInterrupt:
-        print("Stopped recording")
+        logging.info("Keyboard interrupt received. Stopping recording.")
     except Exception as error:
-        print(f"An error occurred: {error}")
+        logging.exception(f"An unexpected error occurred: {error}")
     finally:
-        # Clean up
-        input_stream.stop_stream()
-        input_stream.close()
-        output_stream.stop_stream()
-        output_stream.close()
-        pyaudio_instance.terminate()
+        logging.info("Cleaning up resources...")
+        if input_stream is not None:
+            try:
+                logging.info("Stopping input stream...")
+                input_stream.stop_stream()
+                logging.info("Closing input stream...")
+                input_stream.close()
+            except Exception as e:
+                logging.error(f"Error while closing input stream: {e}")
+
+        if output_stream is not None:
+            try:
+                logging.info("Stopping output stream...")
+                output_stream.stop_stream()
+                logging.info("Closing output stream...")
+                output_stream.close()
+            except Exception as e:
+                logging.error(f"Error while closing output stream: {e}")
+
+        try:
+            logging.info("Terminating PyAudio...")
+            pyaudio_instance.terminate()
+        except Exception as e:
+            logging.error(f"Error while terminating PyAudio: {e}")
+
+        logging.info("Cleanup completed.")
 
 
 if __name__ == "__main__":
