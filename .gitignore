@@ -1,2 +1,6 @@
 
 .DS_Store
+__pycache__
+processing/__pycache__
+*.pyc
+processing/__pycache__/click_pop_removal.cpython-310.pyc

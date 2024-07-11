@@ -1,30 +1,30 @@
-from scipy.signal import sosfilt, iirfilter
+from scipy.signal import sosfilt, butter
+
+
+def band_pass_filter(freq, Q, sample_rate):
+    nyquist = sample_rate / 2
+    low = max(0, (freq / nyquist) / (2 ** (1 / Q)))
+    high = min(1, (freq / nyquist) * (2 ** (1 / Q)))
+    sos = butter(2, [low, high], btype="band", output="sos")
+    return sos
 
 
 def equalize(audio, sample_rate):
-    eq_curve = [
-        (50, 0.8),
-        (100, 0.6),
-        (200, 0.8),
-        (400, 1),
-        (800, 1.2),
-        (1600, 1),
-        (3200, 0.8),
-        (6400, 0.6),
-        (12800, 0.8),
-        (20000, 1),
+    # Define equalizer settings: (frequency, Q, gain)
+    eq_settings = [
+        (100, 1, 0.8),  # Bass
+        (250, 1, 0.9),  # Low mid
+        (500, 1, 1.2),  # Mid
+        (1000, 1, 1.0),  # Upper mid
+        (4000, 1, 0.9),  # Presence
+        (8000, 1, 0.8),  # Brilliance
     ]
 
-    eq_curve_freqs, eq_curve_gain = zip(*eq_curve)
-    nyquist = 0.5 * sample_rate
-    sos = iirfilter(
-        10,
-        [f / nyquist for f in eq_curve_freqs if f / nyquist > 0],
-        rp=5,
-        rs=60,
-        btype="band",
-        ftype="cheby2",
-        output="sos",
-    )
-    eq_audio = sosfilt(sos, audio)
+    eq_audio = audio.copy()
+
+    for freq, Q, gain in eq_settings:
+        sos = band_pass_filter(freq, Q, sample_rate)
+        filtered = sosfilt(sos, eq_audio)
+        eq_audio += (filtered - eq_audio) * (gain - 1)
+
     return eq_audio

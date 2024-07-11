@@ -1,7 +1,9 @@
 import pyaudio
 import numpy as np
 import argparse
-from pynput import keyboard
+import sys
+import select
+import threading
 from processing.click_pop_removal import remove_clicks_pops
 from processing.noise_reduction import noise_reduction
 from processing.equalization import equalize
@@ -10,60 +12,12 @@ from processing.wow_flutter_correction import wow_flutter_correction
 from processing.harmonic_excitation import harmonic_excitation
 from processing.dynamic_range_expansion import dynamic_range_expansion
 from processing.de_esser import sidechain_de_esser
-
-# Global variables for processing control
-ENABLE_PROCESSING = True
-ENABLE_DE_ESSING = True
-ENABLE_STEREO_ENHANCEMENT = True
-ENABLE_SOFT_CLIPPING = True
-ENABLE_CLICK_POP_REMOVAL = True
-ENABLE_NOISE_REDUCTION = True
-ENABLE_EQUALIZATION = True
-ENABLE_PHASE_CORRECTION = True
-ENABLE_WOW_FLUTTER_CORRECTION = True
-ENABLE_HARMONIC_EXCITATION = True
-ENABLE_DYNAMIC_RANGE_EXPANSION = True
+from toggle_settings import toggle_processing_settings, print_processing_settings
+from utils import list_audio_devices, simple_stereo_enhance, soft_clipper
+from config import AudioProcessingConfig
 
 
-def list_audio_devices():
-    p = pyaudio.PyAudio()
-    print("Available audio devices:")
-    for i in range(p.get_device_count()):
-        dev = p.get_device_info_by_index(i)
-        print(f"Device {i}: {dev['name']}")
-        print(f"  Max Input Channels: {dev['maxInputChannels']}")
-        print(f"  Max Output Channels: {dev['maxOutputChannels']}")
-        print(f"  Default Sample Rate: {dev['defaultSampleRate']}")
-    p.terminate()
-
-
-def simple_stereo_enhance(
-    left_channel: np.ndarray, right_channel: np.ndarray, width: float
-) -> tuple[np.ndarray, np.ndarray]:
-    mid_channel = (left_channel + right_channel) / 2
-    side_channel = (left_channel - right_channel) / 2
-    enhanced_left = mid_channel + width * side_channel
-    enhanced_right = mid_channel - width * side_channel
-    return enhanced_left, enhanced_right
-
-
-def soft_clipper(x: np.ndarray, threshold: float) -> np.ndarray:
-    return np.tanh(x / threshold) * threshold
-
-
-def on_press(key):
-    global ENABLE_PROCESSING
-    if key == keyboard.Key.space:
-        ENABLE_PROCESSING = not ENABLE_PROCESSING
-        print(f"Processing {'enabled' if ENABLE_PROCESSING else 'disabled'}")
-
-
-def process_audio(args):
-    global ENABLE_PROCESSING, ENABLE_DE_ESSING, ENABLE_STEREO_ENHANCEMENT, ENABLE_SOFT_CLIPPING
-    global ENABLE_CLICK_POP_REMOVAL, ENABLE_NOISE_REDUCTION, ENABLE_EQUALIZATION
-    global ENABLE_PHASE_CORRECTION, ENABLE_WOW_FLUTTER_CORRECTION, ENABLE_HARMONIC_EXCITATION
-    global ENABLE_DYNAMIC_RANGE_EXPANSION
-
+def process_audio(args, config):
     pyaudio_instance = pyaudio.PyAudio()
     input_stream = None
     output_stream = None
@@ -97,7 +51,9 @@ def process_audio(args):
             frames_per_buffer=chunk_size,
         )
 
-        print("Processing audio... Press space to toggle processing on/off.")
+        print_processing_settings(config)
+        print("Processing audio... Press 't' to toggle processing settings.")
+
         while True:
             input_data = np.frombuffer(
                 input_stream.read(chunk_size, exception_on_overflow=False),
@@ -110,33 +66,33 @@ def process_audio(args):
             left_channel = input_data[::2]
             right_channel = input_data[1::2]
 
-            if ENABLE_PROCESSING:
-                if ENABLE_CLICK_POP_REMOVAL:
+            if config.ENABLE_PROCESSING:
+                if config.ENABLE_CLICK_POP_REMOVAL:
                     left_channel = remove_clicks_pops(left_channel, sample_rate)
                     right_channel = remove_clicks_pops(right_channel, sample_rate)
 
-                if ENABLE_NOISE_REDUCTION:
+                if config.ENABLE_NOISE_REDUCTION:
                     left_channel = noise_reduction(left_channel, sample_rate)
                     right_channel = noise_reduction(right_channel, sample_rate)
 
-                if ENABLE_EQUALIZATION:
+                if config.ENABLE_EQUALIZATION:
                     left_channel = equalize(left_channel, sample_rate)
                     right_channel = equalize(right_channel, sample_rate)
 
-                if ENABLE_PHASE_CORRECTION:
+                if config.ENABLE_PHASE_CORRECTION:
                     left_channel, right_channel = phase_correction(
                         left_channel, right_channel
                     )
 
-                if ENABLE_WOW_FLUTTER_CORRECTION:
+                if config.ENABLE_WOW_FLUTTER_CORRECTION:
                     left_channel = wow_flutter_correction(left_channel, sample_rate)
                     right_channel = wow_flutter_correction(right_channel, sample_rate)
 
-                if ENABLE_HARMONIC_EXCITATION:
+                if config.ENABLE_HARMONIC_EXCITATION:
                     left_channel = harmonic_excitation(left_channel, sample_rate)
                     right_channel = harmonic_excitation(right_channel, sample_rate)
 
-                if ENABLE_DYNAMIC_RANGE_EXPANSION:
+                if config.ENABLE_DYNAMIC_RANGE_EXPANSION:
                     left_channel = dynamic_range_expansion(
                         left_channel,
                         sample_rate,
@@ -154,7 +110,7 @@ def process_audio(args):
                         args.dre_release,
                     )
 
-                if ENABLE_DE_ESSING:
+                if config.ENABLE_DE_ESSING:
                     left_channel = sidechain_de_esser(
                         left_channel,
                         sample_rate,
@@ -172,12 +128,12 @@ def process_audio(args):
                         args.de_essing_release,
                     )
 
-                if ENABLE_STEREO_ENHANCEMENT:
+                if config.ENABLE_STEREO_ENHANCEMENT:
                     left_channel, right_channel = simple_stereo_enhance(
                         left_channel, right_channel, args.stereo_width
                     )
 
-                if ENABLE_SOFT_CLIPPING:
+                if config.ENABLE_SOFT_CLIPPING:
                     left_channel = soft_clipper(left_channel, args.clip_threshold)
                     right_channel = soft_clipper(right_channel, args.clip_threshold)
 
@@ -198,6 +154,15 @@ def process_audio(args):
             output_stream.stop_stream()
             output_stream.close()
         pyaudio_instance.terminate()
+
+
+def user_input_thread(config):
+    while True:
+        user_input = input()
+        if user_input == "t":
+            toggle_processing_settings(config)
+            print_processing_settings(config)
+            print("Processing audio...")
 
 
 def main():
@@ -338,60 +303,38 @@ def main():
             input("Enter the index of the input device you want to use: ")
         )
 
-    global ENABLE_DE_ESSING, ENABLE_STEREO_ENHANCEMENT, ENABLE_SOFT_CLIPPING
-    global ENABLE_CLICK_POP_REMOVAL, ENABLE_NOISE_REDUCTION, ENABLE_EQUALIZATION
-    global ENABLE_PHASE_CORRECTION, ENABLE_WOW_FLUTTER_CORRECTION, ENABLE_HARMONIC_EXCITATION
-    global ENABLE_DYNAMIC_RANGE_EXPANSION
+    config = AudioProcessingConfig()
+
     if args.disable_all:
-        ENABLE_DE_ESSING = False
-        ENABLE_STEREO_ENHANCEMENT = False
-        ENABLE_SOFT_CLIPPING = False
-        ENABLE_CLICK_POP_REMOVAL = False
-        ENABLE_NOISE_REDUCTION = False
-        ENABLE_EQUALIZATION = False
-        ENABLE_PHASE_CORRECTION = False
-        ENABLE_WOW_FLUTTER_CORRECTION = False
-        ENABLE_HARMONIC_EXCITATION = False
-        ENABLE_DYNAMIC_RANGE_EXPANSION = False
+        config.ENABLE_DE_ESSING = False
+        config.ENABLE_STEREO_ENHANCEMENT = False
+        config.ENABLE_SOFT_CLIPPING = False
+        config.ENABLE_CLICK_POP_REMOVAL = False
+        config.ENABLE_NOISE_REDUCTION = False
+        config.ENABLE_EQUALIZATION = False
+        config.ENABLE_PHASE_CORRECTION = False
+        config.ENABLE_WOW_FLUTTER_CORRECTION = False
+        config.ENABLE_HARMONIC_EXCITATION = False
+        config.ENABLE_DYNAMIC_RANGE_EXPANSION = False
     else:
-        ENABLE_DE_ESSING = not args.disable_de_essing
-        ENABLE_STEREO_ENHANCEMENT = not args.disable_stereo
-        ENABLE_SOFT_CLIPPING = not args.disable_clipping
-        ENABLE_CLICK_POP_REMOVAL = not args.disable_click_pop_removal
-        ENABLE_NOISE_REDUCTION = not args.disable_noise_reduction
-        ENABLE_EQUALIZATION = not args.disable_equalization
-        ENABLE_PHASE_CORRECTION = not args.disable_phase_correction
-        ENABLE_WOW_FLUTTER_CORRECTION = not args.disable_wow_flutter_correction
-        ENABLE_HARMONIC_EXCITATION = not args.disable_harmonic_excitation
-        ENABLE_DYNAMIC_RANGE_EXPANSION = not args.disable_dynamic_range_expansion
+        config.ENABLE_DE_ESSING = not args.disable_de_essing
+        config.ENABLE_STEREO_ENHANCEMENT = not args.disable_stereo
+        config.ENABLE_SOFT_CLIPPING = not args.disable_clipping
+        config.ENABLE_CLICK_POP_REMOVAL = not args.disable_click_pop_removal
+        config.ENABLE_NOISE_REDUCTION = not args.disable_noise_reduction
+        config.ENABLE_EQUALIZATION = not args.disable_equalization
+        config.ENABLE_PHASE_CORRECTION = not args.disable_phase_correction
+        config.ENABLE_WOW_FLUTTER_CORRECTION = not args.disable_wow_flutter_correction
+        config.ENABLE_HARMONIC_EXCITATION = not args.disable_harmonic_excitation
+        config.ENABLE_DYNAMIC_RANGE_EXPANSION = not args.disable_dynamic_range_expansion
 
-    print("Current processing settings:")
-    print(f"  De-essing: {'Enabled' if ENABLE_DE_ESSING else 'Disabled'}")
-    print(
-        f"  Stereo Enhancement: {'Enabled' if ENABLE_STEREO_ENHANCEMENT else 'Disabled'}"
-    )
-    print(f"  Soft Clipping: {'Enabled' if ENABLE_SOFT_CLIPPING else 'Disabled'}")
-    print(
-        f"  Click and Pop Removal: {'Enabled' if ENABLE_CLICK_POP_REMOVAL else 'Disabled'}"
-    )
-    print(f"  Noise Reduction: {'Enabled' if ENABLE_NOISE_REDUCTION else 'Disabled'}")
-    print(f"  Equalization: {'Enabled' if ENABLE_EQUALIZATION else 'Disabled'}")
-    print(f"  Phase Correction: {'Enabled' if ENABLE_PHASE_CORRECTION else 'Disabled'}")
-    print(
-        f"  Wow and Flutter Correction: {'Enabled' if ENABLE_WOW_FLUTTER_CORRECTION else 'Disabled'}"
-    )
-    print(
-        f"  Harmonic Excitation: {'Enabled' if ENABLE_HARMONIC_EXCITATION else 'Disabled'}"
-    )
-    print(
-        f"  Dynamic Range Expansion: {'Enabled' if ENABLE_DYNAMIC_RANGE_EXPANSION else 'Disabled'}"
-    )
+    print_processing_settings(config)
+    print("Processing audio...")
 
-    # Start keyboard listener
-    listener = keyboard.Listener(on_press=on_press)
-    listener.start()
+    audio_thread = threading.Thread(target=process_audio, args=(args, config))
+    audio_thread.start()
 
-    process_audio(args)
+    user_input_thread(config)
 
 
 if __name__ == "__main__":

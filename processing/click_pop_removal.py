@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.signal import find_peaks, butter, lfilter
+from scipy.signal import find_peaks, butter, sosfilt
 
 
 def remove_clicks_pops(audio, sample_rate):
@@ -10,11 +10,11 @@ def remove_clicks_pops(audio, sample_rate):
         np.arange(len(audio)), np.arange(len(audio))[mask], audio[mask]
     )
 
-    # Smoothing the interpolated regions
+    # Improved smoothing of the interpolated regions
     lowcut = 1000
     nyquist = 0.5 * sample_rate
     if lowcut / nyquist > 0:
-        b, a = butter(2, lowcut / nyquist, btype="low")
-        smoothed_audio = lfilter(b, a, interpolated_audio)
+        sos = butter(2, lowcut / nyquist, btype="low", output="sos")
+        smoothed_audio = sosfilt(sos, interpolated_audio)
         return smoothed_audio
     return interpolated_audio

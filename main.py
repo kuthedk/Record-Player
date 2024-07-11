@@ -4,6 +4,8 @@ import time
 import subprocess
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from config import AudioProcessingConfig
+
 
 class CodeChangeHandler(FileSystemEventHandler):
     def __init__(self, filename):
@@ -14,6 +16,7 @@ class CodeChangeHandler(FileSystemEventHandler):
             print(f"Code change detected in {self.filename}")
             restart_audio_processing()
 
+
 def restart_audio_processing():
     global audio_process
     if audio_process:
@@ -23,17 +26,22 @@ def restart_audio_processing():
         [sys.executable, "audio_processor.py"] + sys.argv[1:]
     )
 
+
 if __name__ == "__main__":
     audio_process = None
 
+    # Check if --list-devices is in the arguments
     if "--list-devices" in sys.argv:
         subprocess.run([sys.executable, "audio_processor.py", "--list-devices"])
         sys.exit(0)
 
+    # If no input device is specified, run the script to list devices and prompt for input
     if "--input-device" not in sys.argv:
         subprocess.run([sys.executable, "audio_processor.py", "--list-devices"])
         input_device = input("Enter the index of the input device you want to use: ")
         sys.argv.extend(["--input-device", input_device])
+
+    config = AudioProcessingConfig()
 
     restart_audio_processing()
 
