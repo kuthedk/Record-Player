@@ -1,14 +1,28 @@
 import pyaudio
 import numpy as np
-from scipy import signal
 import argparse
 from pynput import keyboard
+from processing.click_pop_removal import remove_clicks_pops
+from processing.noise_reduction import noise_reduction
+from processing.equalization import equalize
+from processing.phase_correction import phase_correction
+from processing.wow_flutter_correction import wow_flutter_correction
+from processing.harmonic_excitation import harmonic_excitation
+from processing.dynamic_range_expansion import dynamic_range_expansion
+from processing.de_esser import sidechain_de_esser
 
 # Global variables for processing control
 ENABLE_PROCESSING = True
 ENABLE_DE_ESSING = True
 ENABLE_STEREO_ENHANCEMENT = True
 ENABLE_SOFT_CLIPPING = True
+ENABLE_CLICK_POP_REMOVAL = True
+ENABLE_NOISE_REDUCTION = True
+ENABLE_EQUALIZATION = True
+ENABLE_PHASE_CORRECTION = True
+ENABLE_WOW_FLUTTER_CORRECTION = True
+ENABLE_HARMONIC_EXCITATION = True
+ENABLE_DYNAMIC_RANGE_EXPANSION = True
 
 
 def list_audio_devices():
@@ -37,39 +51,6 @@ def soft_clipper(x: np.ndarray, threshold: float) -> np.ndarray:
     return np.tanh(x / threshold) * threshold
 
 
-def de_esser(audio, sample_rate, threshold, ratio, attack, release):
-    sibilance_freq_range = [5000, 10000]
-    nyquist = 0.5 * sample_rate
-    low = sibilance_freq_range[0] / nyquist
-    high = sibilance_freq_range[1] / nyquist
-    b, a = signal.butter(4, [low, high], btype="band")
-
-    sibilance = signal.lfilter(b, a, audio)
-
-    gain_reduction = np.zeros_like(sibilance)
-    envelope = np.zeros_like(sibilance)
-
-    attack_coeff = np.exp(-1.0 / (attack * sample_rate))
-    release_coeff = np.exp(-1.0 / (release * sample_rate))
-
-    for i in range(1, len(sibilance)):
-        if np.abs(sibilance[i]) > envelope[i - 1]:
-            envelope[i] = attack_coeff * envelope[i - 1] + (1 - attack_coeff) * np.abs(
-                sibilance[i]
-            )
-        else:
-            envelope[i] = release_coeff * envelope[i - 1] + (
-                1 - release_coeff
-            ) * np.abs(sibilance[i])
-
-        gain_reduction[i] = np.maximum(0, 1 - threshold / (envelope[i] + 1e-6))
-        gain_reduction[i] = np.minimum(gain_reduction[i], 1.0 / ratio)
-
-    compressed_sibilance = sibilance * (1 - gain_reduction)
-    de_essed = audio - compressed_sibilance
-    return de_essed
-
-
 def on_press(key):
     global ENABLE_PROCESSING
     if key == keyboard.Key.space:
@@ -79,6 +60,9 @@ def on_press(key):
 
 def process_audio(args):
     global ENABLE_PROCESSING, ENABLE_DE_ESSING, ENABLE_STEREO_ENHANCEMENT, ENABLE_SOFT_CLIPPING
+    global ENABLE_CLICK_POP_REMOVAL, ENABLE_NOISE_REDUCTION, ENABLE_EQUALIZATION
+    global ENABLE_PHASE_CORRECTION, ENABLE_WOW_FLUTTER_CORRECTION, ENABLE_HARMONIC_EXCITATION
+    global ENABLE_DYNAMIC_RANGE_EXPANSION
 
     pyaudio_instance = pyaudio.PyAudio()
     input_stream = None
@@ -127,8 +111,51 @@ def process_audio(args):
             right_channel = input_data[1::2]
 
             if ENABLE_PROCESSING:
+                if ENABLE_CLICK_POP_REMOVAL:
+                    left_channel = remove_clicks_pops(left_channel, sample_rate)
+                    right_channel = remove_clicks_pops(right_channel, sample_rate)
+
+                if ENABLE_NOISE_REDUCTION:
+                    left_channel = noise_reduction(left_channel, sample_rate)
+                    right_channel = noise_reduction(right_channel, sample_rate)
+
+                if ENABLE_EQUALIZATION:
+                    left_channel = equalize(left_channel, sample_rate)
+                    right_channel = equalize(right_channel, sample_rate)
+
+                if ENABLE_PHASE_CORRECTION:
+                    left_channel, right_channel = phase_correction(
+                        left_channel, right_channel
+                    )
+
+                if ENABLE_WOW_FLUTTER_CORRECTION:
+                    left_channel = wow_flutter_correction(left_channel, sample_rate)
+                    right_channel = wow_flutter_correction(right_channel, sample_rate)
+
+                if ENABLE_HARMONIC_EXCITATION:
+                    left_channel = harmonic_excitation(left_channel, sample_rate)
+                    right_channel = harmonic_excitation(right_channel, sample_rate)
+
+                if ENABLE_DYNAMIC_RANGE_EXPANSION:
+                    left_channel = dynamic_range_expansion(
+                        left_channel,
+                        sample_rate,
+                        args.dre_threshold,
+                        args.dre_ratio,
+                        args.dre_attack,
+                        args.dre_release,
+                    )
+                    right_channel = dynamic_range_expansion(
+                        right_channel,
+                        sample_rate,
+                        args.dre_threshold,
+                        args.dre_ratio,
+                        args.dre_attack,
+                        args.dre_release,
+                    )
+
                 if ENABLE_DE_ESSING:
-                    left_channel = de_esser(
+                    left_channel = sidechain_de_esser(
                         left_channel,
                         sample_rate,
                         args.de_essing_threshold,
@@ -136,7 +163,7 @@ def process_audio(args):
                         args.de_essing_attack,
                         args.de_essing_release,
                     )
-                    right_channel = de_esser(
+                    right_channel = sidechain_de_esser(
                         right_channel,
                         sample_rate,
                         args.de_essing_threshold,
@@ -230,6 +257,30 @@ def main():
         help="De-essing release time in seconds (default: 0.05)",
     )
     parser.add_argument(
+        "--dre-threshold",
+        type=float,
+        default=0.2,
+        help="Dynamic Range Expansion threshold (default: 0.2)",
+    )
+    parser.add_argument(
+        "--dre-ratio",
+        type=float,
+        default=1.5,
+        help="Dynamic Range Expansion ratio (default: 1.5)",
+    )
+    parser.add_argument(
+        "--dre-attack",
+        type=float,
+        default=0.01,
+        help="Dynamic Range Expansion attack time in seconds (default: 0.01)",
+    )
+    parser.add_argument(
+        "--dre-release",
+        type=float,
+        default=0.1,
+        help="Dynamic Range Expansion release time in seconds (default: 0.1)",
+    )
+    parser.add_argument(
         "--disable-de-essing", action="store_true", help="Disable de-essing"
     )
     parser.add_argument(
@@ -237,6 +288,37 @@ def main():
     )
     parser.add_argument(
         "--disable-clipping", action="store_true", help="Disable soft clipping"
+    )
+    parser.add_argument(
+        "--disable-click-pop-removal",
+        action="store_true",
+        help="Disable click and pop removal",
+    )
+    parser.add_argument(
+        "--disable-noise-reduction", action="store_true", help="Disable noise reduction"
+    )
+    parser.add_argument(
+        "--disable-equalization", action="store_true", help="Disable equalization"
+    )
+    parser.add_argument(
+        "--disable-phase-correction",
+        action="store_true",
+        help="Disable phase correction",
+    )
+    parser.add_argument(
+        "--disable-wow-flutter-correction",
+        action="store_true",
+        help="Disable wow and flutter correction",
+    )
+    parser.add_argument(
+        "--disable-harmonic-excitation",
+        action="store_true",
+        help="Disable harmonic excitation",
+    )
+    parser.add_argument(
+        "--disable-dynamic-range-expansion",
+        action="store_true",
+        help="Disable dynamic range expansion",
     )
     parser.add_argument(
         "--disable-all",
@@ -257,14 +339,31 @@ def main():
         )
 
     global ENABLE_DE_ESSING, ENABLE_STEREO_ENHANCEMENT, ENABLE_SOFT_CLIPPING
+    global ENABLE_CLICK_POP_REMOVAL, ENABLE_NOISE_REDUCTION, ENABLE_EQUALIZATION
+    global ENABLE_PHASE_CORRECTION, ENABLE_WOW_FLUTTER_CORRECTION, ENABLE_HARMONIC_EXCITATION
+    global ENABLE_DYNAMIC_RANGE_EXPANSION
     if args.disable_all:
         ENABLE_DE_ESSING = False
         ENABLE_STEREO_ENHANCEMENT = False
         ENABLE_SOFT_CLIPPING = False
+        ENABLE_CLICK_POP_REMOVAL = False
+        ENABLE_NOISE_REDUCTION = False
+        ENABLE_EQUALIZATION = False
+        ENABLE_PHASE_CORRECTION = False
+        ENABLE_WOW_FLUTTER_CORRECTION = False
+        ENABLE_HARMONIC_EXCITATION = False
+        ENABLE_DYNAMIC_RANGE_EXPANSION = False
     else:
         ENABLE_DE_ESSING = not args.disable_de_essing
         ENABLE_STEREO_ENHANCEMENT = not args.disable_stereo
         ENABLE_SOFT_CLIPPING = not args.disable_clipping
+        ENABLE_CLICK_POP_REMOVAL = not args.disable_click_pop_removal
+        ENABLE_NOISE_REDUCTION = not args.disable_noise_reduction
+        ENABLE_EQUALIZATION = not args.disable_equalization
+        ENABLE_PHASE_CORRECTION = not args.disable_phase_correction
+        ENABLE_WOW_FLUTTER_CORRECTION = not args.disable_wow_flutter_correction
+        ENABLE_HARMONIC_EXCITATION = not args.disable_harmonic_excitation
+        ENABLE_DYNAMIC_RANGE_EXPANSION = not args.disable_dynamic_range_expansion
 
     print("Current processing settings:")
     print(f"  De-essing: {'Enabled' if ENABLE_DE_ESSING else 'Disabled'}")
@@ -272,6 +371,21 @@ def main():
         f"  Stereo Enhancement: {'Enabled' if ENABLE_STEREO_ENHANCEMENT else 'Disabled'}"
     )
     print(f"  Soft Clipping: {'Enabled' if ENABLE_SOFT_CLIPPING else 'Disabled'}")
+    print(
+        f"  Click and Pop Removal: {'Enabled' if ENABLE_CLICK_POP_REMOVAL else 'Disabled'}"
+    )
+    print(f"  Noise Reduction: {'Enabled' if ENABLE_NOISE_REDUCTION else 'Disabled'}")
+    print(f"  Equalization: {'Enabled' if ENABLE_EQUALIZATION else 'Disabled'}")
+    print(f"  Phase Correction: {'Enabled' if ENABLE_PHASE_CORRECTION else 'Disabled'}")
+    print(
+        f"  Wow and Flutter Correction: {'Enabled' if ENABLE_WOW_FLUTTER_CORRECTION else 'Disabled'}"
+    )
+    print(
+        f"  Harmonic Excitation: {'Enabled' if ENABLE_HARMONIC_EXCITATION else 'Disabled'}"
+    )
+    print(
+        f"  Dynamic Range Expansion: {'Enabled' if ENABLE_DYNAMIC_RANGE_EXPANSION else 'Disabled'}"
+    )
 
     # Start keyboard listener
     listener = keyboard.Listener(on_press=on_press)
