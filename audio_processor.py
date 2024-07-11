@@ -37,71 +37,36 @@ def soft_clipper(x: np.ndarray, threshold: float) -> np.ndarray:
     return np.tanh(x / threshold) * threshold
 
 
-def adaptive_de_esser(
-    audio: np.ndarray, sample_rate: int, strength: float
-) -> np.ndarray:
-    # Define frequency bands
-    low_band = (20, 2000)
-    mid_band = (2000, 6000)
-    high_band = (6000, 20000)
+def de_esser(audio, sample_rate, threshold, ratio, attack, release):
+    sibilance_freq_range = [5000, 10000]
+    nyquist = 0.5 * sample_rate
+    low = sibilance_freq_range[0] / nyquist
+    high = sibilance_freq_range[1] / nyquist
+    b, a = signal.butter(4, [low, high], btype="band")
 
-    # Design band-pass filters
-    nyquist = sample_rate / 2
-    low_sos = signal.butter(
-        6,
-        [low_band[0] / nyquist, low_band[1] / nyquist],
-        btype="bandpass",
-        output="sos",
-    )
-    mid_sos = signal.butter(
-        6,
-        [mid_band[0] / nyquist, mid_band[1] / nyquist],
-        btype="bandpass",
-        output="sos",
-    )
-    high_sos = signal.butter(
-        6,
-        [high_band[0] / nyquist, high_band[1] / nyquist],
-        btype="bandpass",
-        output="sos",
-    )
+    sibilance = signal.lfilter(b, a, audio)
 
-    # Apply filters
-    low_band_audio = signal.sosfilt(low_sos, audio)
-    mid_band_audio = signal.sosfilt(mid_sos, audio)
-    high_band_audio = signal.sosfilt(high_sos, audio)
+    gain_reduction = np.zeros_like(sibilance)
+    envelope = np.zeros_like(sibilance)
 
-    # Compute envelopes
-    def compute_envelope(x):
-        return np.abs(signal.hilbert(x))
+    attack_coeff = np.exp(-1.0 / (attack * sample_rate))
+    release_coeff = np.exp(-1.0 / (release * sample_rate))
 
-    low_env = compute_envelope(low_band_audio)
-    mid_env = compute_envelope(mid_band_audio)
-    high_env = compute_envelope(high_band_audio)
+    for i in range(1, len(sibilance)):
+        if np.abs(sibilance[i]) > envelope[i - 1]:
+            envelope[i] = attack_coeff * envelope[i - 1] + (1 - attack_coeff) * np.abs(
+                sibilance[i]
+            )
+        else:
+            envelope[i] = release_coeff * envelope[i - 1] + (
+                1 - release_coeff
+            ) * np.abs(sibilance[i])
 
-    # Adaptive thresholding
-    def adaptive_threshold(env, percentile=95):
-        return np.percentile(env, percentile)
+        gain_reduction[i] = np.maximum(0, 1 - threshold / (envelope[i] + 1e-6))
+        gain_reduction[i] = np.minimum(gain_reduction[i], 1.0 / ratio)
 
-    low_threshold = adaptive_threshold(low_env, 98)
-    mid_threshold = adaptive_threshold(mid_env, 95)
-    high_threshold = adaptive_threshold(high_env, 92)
-
-    # Compression
-    def compress(x, threshold, ratio=2):
-        mask = x > threshold
-        x[mask] = threshold + (x[mask] - threshold) / ratio
-        return x
-
-    low_band_compressed = compress(low_band_audio, low_threshold, 1.5)
-    mid_band_compressed = compress(mid_band_audio, mid_threshold, 2)
-    high_band_compressed = compress(high_band_audio, high_threshold, 3)
-
-    # Mix back with strength adjustment
-    de_essed = low_band_compressed + strength * (
-        0.8 * mid_band_compressed + 0.6 * high_band_compressed
-    )
-
+    compressed_sibilance = sibilance * (1 - gain_reduction)
+    de_essed = audio - compressed_sibilance
     return de_essed
 
 
@@ -163,11 +128,21 @@ def process_audio(args):
 
             if ENABLE_PROCESSING:
                 if ENABLE_DE_ESSING:
-                    left_channel = adaptive_de_esser(
-                        left_channel, sample_rate, args.de_essing_strength
+                    left_channel = de_esser(
+                        left_channel,
+                        sample_rate,
+                        args.de_essing_threshold,
+                        args.de_essing_ratio,
+                        args.de_essing_attack,
+                        args.de_essing_release,
                     )
-                    right_channel = adaptive_de_esser(
-                        right_channel, sample_rate, args.de_essing_strength
+                    right_channel = de_esser(
+                        right_channel,
+                        sample_rate,
+                        args.de_essing_threshold,
+                        args.de_essing_ratio,
+                        args.de_essing_attack,
+                        args.de_essing_release,
                     )
 
                 if ENABLE_STEREO_ENHANCEMENT:
@@ -231,10 +206,28 @@ def main():
         "--output-gain", type=float, default=0.9, help="Output gain (default: 0.9)"
     )
     parser.add_argument(
-        "--de-essing-strength",
+        "--de-essing-threshold",
         type=float,
-        default=1.0,
-        help="De-essing strength (default: 1.0)",
+        default=0.2,
+        help="De-essing threshold (default: 0.2)",
+    )
+    parser.add_argument(
+        "--de-essing-ratio",
+        type=float,
+        default=4.0,
+        help="De-essing ratio (default: 4.0)",
+    )
+    parser.add_argument(
+        "--de-essing-attack",
+        type=float,
+        default=0.001,
+        help="De-essing attack time in seconds (default: 0.001)",
+    )
+    parser.add_argument(
+        "--de-essing-release",
+        type=float,
+        default=0.05,
+        help="De-essing release time in seconds (default: 0.05)",
     )
     parser.add_argument(
         "--disable-de-essing", action="store_true", help="Disable de-essing"
