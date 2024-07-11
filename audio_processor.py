@@ -52,7 +52,7 @@ def process_audio(args, config):
         )
 
         print_processing_settings(config)
-        print("Processing audio... Press 't' to toggle processing settings.")
+        print("Processing audio...")
 
         while True:
             input_data = np.frombuffer(

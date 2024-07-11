@@ -4,3 +4,12 @@ __pycache__
 processing/__pycache__
 *.pyc
 processing/__pycache__/click_pop_removal.cpython-310.pyc
+processing/__pycache__/__init__.cpython-310.pyc
+processing/__pycache__/click_pop_removal.cpython-310.pyc
+processing/__pycache__/de_esser.cpython-310.pyc
+processing/__pycache__/dynamic_range_expansion.cpython-310.pyc
+processing/__pycache__/equalization.cpython-310.pyc
+processing/__pycache__/harmonic_excitation.cpython-310.pyc
+processing/__pycache__/noise_reduction.cpython-310.pyc
+processing/__pycache__/phase_correction.cpython-310.pyc
+processing/__pycache__/wow_flutter_correction.cpython-310.pyc
